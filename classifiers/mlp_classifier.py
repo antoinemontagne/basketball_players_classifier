@@ -14,14 +14,15 @@ root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.append(root_dir)
 from classifiers.core_functions import extract_preprocessed_datas, score_classifier, SEED
 
-LEARNING_RATE = 0.005
+LEARNING_RATE = 0.006844259372316053
 NB_EPOCHS = 400
-HIDDEN_LAYER_SIZE = 18
+HIDDEN_LAYER_SIZE = 26
+DROPOUT = 0.46489983932774215
 
 
 class MLPClassifier_torch(nn.Module):
     '''MLP classifier using PyTorch'''
-    def __init__(self, hidden_layer_size=HIDDEN_LAYER_SIZE):
+    def __init__(self, hidden_layer_size=HIDDEN_LAYER_SIZE, dropout_proba=DROPOUT):
         '''Initialize the model
         Args:
             hidden_layer_size (int): size of the hidden layer
@@ -29,6 +30,7 @@ class MLPClassifier_torch(nn.Module):
         super(MLPClassifier_torch, self).__init__()
         self.fc1 = nn.Linear(19, hidden_layer_size)
         self.fc2 = nn.Linear(hidden_layer_size, 1)
+        self.dropout = nn.Dropout(dropout_proba)
 
     def forward(self, x):
         '''Forward pass of the model
@@ -36,13 +38,14 @@ class MLPClassifier_torch(nn.Module):
             x (torch.Tensor): input data
         '''
         x = torch.relu(self.fc1(x))
+        x = self.dropout(x)
         x = torch.sigmoid(self.fc2(x))
         return x
     
 
 class MLPClassifier():
     '''Training and evaluation for MLP classifier'''
-    def __init__(self, lr, nb_epochs, path, X_test=None, y_test=None, hidden_layer_size=HIDDEN_LAYER_SIZE):
+    def __init__(self, lr, nb_epochs, path, X_test=None, y_test=None, hidden_layer_size=HIDDEN_LAYER_SIZE, dropout_proba=DROPOUT):
         '''Initialize the model
         Args:
             lr (float): learning rate
@@ -52,7 +55,7 @@ class MLPClassifier():
             y_test (np.array): test target
             hidden_layer_size (int): size of the hidden layer
         '''
-        self.mlp = MLPClassifier_torch(hidden_layer_size)
+        self.mlp = MLPClassifier_torch(hidden_layer_size, dropout_proba)
         self.criterion = nn.BCELoss()
         self.optimizer = optim.Adam(self.mlp.parameters(), lr=lr)
         self.nb_epochs = nb_epochs
@@ -162,7 +165,7 @@ def main():
     
     # Create the model and the pipeline
     torch.manual_seed(SEED)
-    mlp = MLPClassifier(LEARNING_RATE, NB_EPOCHS, model_path, X_test, y_test, HIDDEN_LAYER_SIZE)
+    mlp = MLPClassifier(LEARNING_RATE, NB_EPOCHS, model_path, X_test, y_test, HIDDEN_LAYER_SIZE, DROPOUT)
     pipeline = Pipeline([
         ('scaler', MinMaxScaler()),
         ('mlp_classifier', mlp)
@@ -172,7 +175,7 @@ def main():
     pipeline.fit(X_train, y_train)
 
     # Test the model
-    best_mlp = MLPClassifier(LEARNING_RATE, NB_EPOCHS, model_path, X_test, y_test, HIDDEN_LAYER_SIZE)
+    best_mlp = MLPClassifier(LEARNING_RATE, NB_EPOCHS, model_path, X_test, y_test, HIDDEN_LAYER_SIZE, DROPOUT)
     best_mlp.load()
     best_pipeline = Pipeline([
         ('scaler', MinMaxScaler().fit(X_train)),
