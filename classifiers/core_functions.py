@@ -30,15 +30,16 @@ def score_classifier(X, classifier, labels, n_splits, confusion=True, mlp=False,
     confusion_mat = np.zeros((2,2))
     predictions = []
     recalls = []
-    for training_ids,test_ids in kf.split(X, labels):
+    for i, (training_ids, test_ids) in enumerate(kf.split(X, labels)):
+        print(f"Training {i}th model")
         training_set = X[training_ids]
         training_labels = labels[training_ids]
         test_set = X[test_ids]
         test_labels = labels[test_ids]
 
         if mlp:
-            classifier.reset_model()
-        classifier.fit(training_set,training_labels.values)
+            classifier[1].reset_model()
+        classifier.fit(training_set, training_labels.values)
         predicted_labels = classifier.predict(test_set) 
         predicted_proba = classifier.predict_proba(test_set)[:, 1]
         confusion_mat+=confusion_matrix(test_labels, predicted_labels)
@@ -105,23 +106,3 @@ def plot_roc_auc(predictions):
     plt.title('Receiver Operating Characteristic (ROC) Curve')
     plt.legend(loc='lower right')
     plt.show()
-
-
-def main():
-    datas_path = "../data/nba_logreg.csv"
-
-    # Extract and normalize datas
-    df_features, labels = extract_preprocessed_datas(datas_path, 'TARGET_5Yrs', ['Name'])
-
-    # Scale the datas
-    X = MinMaxScaler().fit_transform(df_features)
-
-    #example of scoring with support vector classifier
-    svm = SVC()
-    neigh = KNeighborsClassifier(n_neighbors=27)
-
-
-if __name__ == "__main__":
-    main()
-
-

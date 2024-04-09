@@ -1,13 +1,3 @@
-"""
-Optuna example that optimizes multi-layer perceptrons using PyTorch.
-
-In this example, we optimize the validation accuracy of fashion product recognition using
-PyTorch and FashionMNIST. We optimize the neural network architecture as well as the optimizer
-configuration. As it is too time consuming to use the whole FashionMNIST dataset,
-we here use a small subset of it.
-
-"""
-
 import os, sys
 from pathlib import Path
 
@@ -21,6 +11,7 @@ from classifiers.core_functions import extract_preprocessed_datas, score_classif
 
 import optuna
 from optuna.trial import TrialState
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -29,12 +20,7 @@ import torch.utils.data
 
 
 DEVICE = torch.device("cpu")
-BATCHSIZE = 128
-CLASSES = 10
-DIR = os.getcwd()
 EPOCHS = 500
-N_TRAIN_EXAMPLES = BATCHSIZE * 30
-N_VALID_EXAMPLES = BATCHSIZE * 10
 
 
 def define_model(trial):
@@ -109,7 +95,7 @@ if __name__ == "__main__":
     current_path = Path.cwd()
     db_file = current_path / 'optuna_study.db'
     if not os.path.exists(db_file):
-        open(db_file, 'a').close()
+        open(db_file, 'a').close() 
     db_url = f'sqlite:///{db_file}'
 
     study = optuna.create_study(direction="maximize", storage=db_url)
