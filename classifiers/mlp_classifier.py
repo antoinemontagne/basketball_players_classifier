@@ -69,7 +69,7 @@ class MLPClassifier_torch(nn.Module):
 
 class MLPClassifier():
     '''Training and evaluation for MLP classifier'''
-    def __init__(self, in_features, nb_hidden_layers, hidden_layer_sizes, hidden_dropout_probas, hidden_activations, optimizer_name, lr, nb_epochs, path, X_test, y_test):
+    def __init__(self, in_features, nb_hidden_layers, hidden_layer_sizes, hidden_dropout_probas, hidden_activations, optimizer_name, lr, nb_epochs, batch_size, path, X_test, y_test):
         '''Initialize the model
         Args:
             in_features (int): number of input features
@@ -88,6 +88,7 @@ class MLPClassifier():
         self.optimizer = getattr(optim, self.optimizer_name)(self.mlp.parameters(), lr=lr)
         self.criterion = nn.BCELoss()
         self.nb_epochs = nb_epochs
+        self.batch_size = batch_size
         self.path = path
         self.X_test = X_test
         self.y_test = y_test
@@ -110,7 +111,7 @@ class MLPClassifier():
         best_epoch = 0
         train_dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.float32).reshape(-1, 1))
         random_sampler = RandomSampler(train_dataset)
-        train_loader = DataLoader(train_dataset, batch_size=32, sampler=random_sampler)
+        train_loader = DataLoader(train_dataset, batch_size=self.batch_size, sampler=random_sampler)
         for epoch in range(self.nb_epochs):
             batch_losses = []
             for X_batch, y_batch in train_loader:
@@ -192,11 +193,11 @@ def read_parameters(parameters_path):
     with open(parameters_path, "r") as file:
         for line in file.readlines():
             key, value = line.split(":")
-            if "optimizer_name" == key:
+            if key == "optimizer_name":
                 parameters[key] = value.strip()
             elif key == "lr":
                 parameters[key] = float(value)
-            elif key == "nb_epochs":
+            elif key in ["nb_epochs", "batch_size"]:
                 parameters[key] = int(value)
             elif "activations" == key:
                 parameters[key] = [x.strip() for x in value.split(",")]
@@ -227,79 +228,43 @@ def main():
     # Get the parameters from the parameters file
     parameters = read_parameters(current_path / "classifiers" / "parameters.txt")
 
-    if not cross_validation:
-        # Create the model
-        scaler = MinMaxScaler().fit(X_train)
-        X_test_scaled = scaler.transform(X_test)
-        torch.manual_seed(SEED)
-        mlp = MLPClassifier(X_train.shape[1], 
-                                len(parameters["n_neurons"]), 
-                                parameters["n_neurons"], 
-                                parameters["dropouts"], 
-                                parameters["activations"], 
-                                parameters["optimizer_name"], 
-                                parameters["lr"], 
-                                parameters["nb_epochs"], 
-                                model_path,
-                                X_test_scaled,
-                                y_test,
-        )
+    # Create the model
+    scaler = MinMaxScaler().fit(X_train)
+    X_test_scaled = scaler.transform(X_test)
+    torch.manual_seed(SEED)
+    mlp = MLPClassifier(X_train.shape[1], 
+                            len(parameters["n_neurons"]), 
+                            parameters["n_neurons"], 
+                            parameters["dropouts"], 
+                            parameters["activations"], 
+                            parameters["optimizer_name"], 
+                            parameters["lr"], 
+                            parameters["nb_epochs"], 
+                            parameters["batch_size"],
+                            model_path,
+                            X_test_scaled,
+                            y_test,
+    )
 
-        pipeline = Pipeline([
-            ('scaler', scaler),
-            ('mlp_classifier', mlp)
-        ])
-        
+    pipeline = Pipeline([
+        ('scaler', scaler),
+        ('mlp_classifier', mlp)
+    ])
+
+    # Train & Evaluate the model
+    if not cross_validation:
         # Train the pipeline
         print("Training the model")
         pipeline.fit(X_train, y_train)
 
         # Test the model
-        best_mlp = MLPClassifier(X_train.shape[1], 
-                                len(parameters["n_neurons"]), 
-                                parameters["n_neurons"], 
-                                parameters["dropouts"], 
-                                parameters["activations"], 
-                                parameters["optimizer_name"], 
-                                parameters["lr"], 
-                                parameters["nb_epochs"], 
-                                model_path,
-                                X_test_scaled,
-                                y_test,
-        )
-        best_mlp.load()
-        best_pipeline = Pipeline([
-            ('scaler', scaler),
-            ('best_mlp_classifier', best_mlp)
-        ])
-        output_binary = best_pipeline.predict(X_test)
+        pipeline[1].load()  # Load the best model (early-stopping)
+        output_binary = pipeline.predict(X_test)
         print(confusion_matrix(y_test, output_binary))
         print(recall_score(y_test, output_binary))
     
     else:
         print("Cross-validation")
-
-        # Create the model
-        scaler = MinMaxScaler().fit(X_train)
-        X_test_scaled = scaler.transform(X_test)
-        mlp = MLPClassifier(X_train.shape[1], 
-                                len(parameters["n_neurons"]), 
-                                parameters["n_neurons"], 
-                                parameters["dropouts"], 
-                                parameters["activations"], 
-                                parameters["optimizer_name"], 
-                                parameters["lr"], 
-                                parameters["nb_epochs"], 
-                                model_path,
-                                X_test_scaled,
-                                y_test,
-        )
-
-        pipeline = Pipeline([
-            ('scaler', scaler),
-            ('mlp_classifier', mlp)
-        ])
-
         _, _ = score_classifier(df_features.values, pipeline, labels, 3, True, True)
 
 
