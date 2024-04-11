@@ -3,102 +3,112 @@ from pathlib import Path
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import accuracy_score
 
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 sys.path.append(root_dir)
-from classifiers.core_functions import extract_preprocessed_datas, score_classifier, SEED
+from classifiers.core_functions import extract_preprocessed_datas, SEED
+from classifiers.mlp_classifier import MLPClassifier_torch
 
 import optuna
 from optuna.trial import TrialState
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-import torch.utils.data
+from torch.utils.data import DataLoader, RandomSampler, TensorDataset
 
 
-DEVICE = torch.device("cpu")
-EPOCHS = 500
+def define_model(trial, input_dim):
+    n_layers = trial.suggest_int("n_layers", 1, 4)
+    out_features = []
+    dropouts = []
+    activations = []
 
-
-def define_model(trial):
-    # We optimize the number of layers, hidden units and dropout ratio in each layer.
-    n_layers = trial.suggest_int("n_layers", 1, 3)
-    layers = []
-
-    in_features = 19
     for i in range(n_layers):
-        out_features = trial.suggest_int("n_units_l{}".format(i), 4, 128)
-        layers.append(nn.Linear(in_features, out_features))
-        layers.append(nn.ReLU())
-        p = trial.suggest_float("dropout_l{}".format(i), 0.2, 0.5)
-        layers.append(nn.Dropout(p))
+        out_feature = trial.suggest_int("n_units_l{}".format(i), 4, 128)
+        dropout = trial.suggest_float("dropout_l{}".format(i), 0.2, 0.5)
+        activation = trial.suggest_categorical("activation_l{}".format(i), ["ReLU", "Tanh", "LeakyReLU", "ELU"])
 
-        in_features = out_features
-    layers.append(nn.Linear(in_features, 1))
-    layers.append(nn.Sigmoid())
+        out_features.append(out_feature)
+        dropouts.append(dropout)
+        activations.append(activation)
 
-    return nn.Sequential(*layers)
+    model = MLPClassifier_torch(input_dim, n_layers, out_features, dropouts, activations)
+
+    return model
 
 
 def objective(trial):
-    # Generate the model.
-    model = define_model(trial).to(DEVICE)
-
-    # Generate the optimizers.
-    optimizer_name = trial.suggest_categorical("optimizer", ["Adam", "RMSprop", "SGD"])
-    lr = trial.suggest_float("lr", 1e-5, 1e-1, log=True)
-    optimizer = getattr(optim, optimizer_name)(model.parameters(), lr=lr)
-
     # Load, preprocess and split the dataset
     datas_path = ".\\data\\nba_logreg.csv"
     df_features, labels = extract_preprocessed_datas(datas_path, 'TARGET_5Yrs', ['Name'])
 
+    # Create the model path
+    current_path = Path.cwd()
+    model_path = current_path / "model"
+    if not model_path.exists():
+        model_path.mkdir(parents=True)
+
     # Split the data
     X_train, X_test, y_train, y_test = train_test_split(df_features.values, labels.values, test_size=0.33, random_state=SEED)
-    
-    # Scaled the data
+ 
+    # Scale the data
     scaler = MinMaxScaler().fit(X_train)
     X_train = scaler.transform(X_train)
     X_test = scaler.transform(X_test)
-
-    # Set the torch seed
+    
+    # Generate the model
     torch.manual_seed(SEED)
+    model = define_model(trial, X_train.shape[1])
 
-    # Training of the model.
-    for epoch in range(EPOCHS):
+    # Define the optimzer, batch size and loss function
+    optimizer_name = trial.suggest_categorical("optimizer", ["Adam", "RMSprop", "SGD"])
+    lr = trial.suggest_float("lr", 1e-5, 1e-1, log=True)
+    weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-3, log=True)
+    optimizer = getattr(torch.optim, optimizer_name)(model.parameters(), lr=lr, weight_decay=weight_decay)
+    batch_size = trial.suggest_int("batch_size", 32, 128)
+    epochs = trial.suggest_int("epochs", 50, 1000)
+    criterion = nn.BCELoss()
+
+    # Train the model
+    train_dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.float32).reshape(-1, 1))
+    random_sampler = RandomSampler(train_dataset)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=random_sampler)
+
+    for epoch in range(epochs):
         model.train()
-        optimizer.zero_grad()
-        output = model(torch.tensor(X_train, dtype=torch.float32))
-        loss = nn.BCELoss()(output, torch.tensor(y_train, dtype=torch.float32).reshape(-1, 1))
-        loss.backward()
-        optimizer.step()
+        for X_batch, y_batch in train_loader:
+            optimizer.zero_grad()
+            output = model(X_batch)
+            loss = criterion(output, y_batch)
+            loss.backward()
+            optimizer.step()
 
+        # Evaluate the model on the test set
         model.eval()
         with torch.no_grad():
             output_test = model(torch.tensor(X_test, dtype=torch.float32))
-            output_test_binary = (output_test >= 0.5).float().flatten()
-            acc = accuracy_score(y_test, output_test_binary)
+            loss_test = criterion(output_test, torch.tensor(y_test, dtype=torch.float32).reshape(-1, 1))
 
-        trial.report(acc, epoch)
+        trial.report(loss_test.item(), epoch)
 
         # Handle pruning based on the intermediate value.
         if trial.should_prune():
             raise optuna.exceptions.TrialPruned()
-
-    return acc
+        
+    return loss_test.item()
 
 
 if __name__ == "__main__":
     current_path = Path.cwd()
-    db_file = current_path / 'optuna_study.db'
+    db_path = current_path / "classifiers" / "optuna" / "study"
+    if not db_path.exists():
+        db_path.mkdir(parents=True)
+    db_file = db_path / 'mlp_optu_100_tpe_500_loss.db'
     if not os.path.exists(db_file):
         open(db_file, 'a').close() 
     db_url = f'sqlite:///{db_file}'
 
-    study = optuna.create_study(direction="maximize", storage=db_url)
+    study = optuna.create_study(direction="minimize", storage=db_url)
     study.optimize(objective, n_trials=100, timeout=600)
 
     pruned_trials = study.get_trials(deepcopy=False, states=[TrialState.PRUNED])

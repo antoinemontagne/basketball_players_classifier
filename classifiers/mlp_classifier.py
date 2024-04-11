@@ -16,7 +16,6 @@ root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.append(root_dir)
 from classifiers.core_functions import extract_preprocessed_datas, score_classifier, SEED
 
-DEVICE = torch.device("cpu")
 
 parser = argparse.ArgumentParser(
     prog="MLP classifier for binary classification"
@@ -113,9 +112,9 @@ class MLPClassifier():
         random_sampler = RandomSampler(train_dataset)
         train_loader = DataLoader(train_dataset, batch_size=self.batch_size, sampler=random_sampler)
         for epoch in range(self.nb_epochs):
+            self.mlp.train()
             batch_losses = []
             for X_batch, y_batch in train_loader:
-                self.mlp.train()
                 self.optimizer.zero_grad()
                 output = self.mlp(X_batch)
                 loss = self.criterion(output, y_batch)
@@ -136,9 +135,9 @@ class MLPClassifier():
                 best_epoch = epoch
                 # Save the best model => early-stopping
                 self.save()
-
+            
             if epoch % (self.nb_epochs // 10) == 0:
-                print(f"Epoch {epoch} loss: {loss.item()}")
+                print(f"Epoch {epoch} - Train loss: {losses[0][-1]} - Test loss: {losses[1][-1]}")
 
         plt.plot(losses[0], label='Train loss')
         plt.plot(losses[1], label='Test loss')
@@ -236,7 +235,7 @@ def main():
                             len(parameters["n_neurons"]), 
                             parameters["n_neurons"], 
                             parameters["dropouts"], 
-                            parameters["activations"], 
+                            parameters["activations"],
                             parameters["optimizer_name"], 
                             parameters["lr"], 
                             parameters["nb_epochs"], 
@@ -257,8 +256,29 @@ def main():
         print("Training the model")
         pipeline.fit(X_train, y_train)
 
-        # Test the model
-        pipeline[1].load()  # Load the best model (early-stopping)
+        # Test the best model
+        # Create the model
+        scaler = MinMaxScaler().fit(X_train)
+        X_test_scaled = scaler.transform(X_test)
+        torch.manual_seed(SEED)
+        best_mlp = MLPClassifier(X_train.shape[1], 
+                                len(parameters["n_neurons"]), 
+                                parameters["n_neurons"], 
+                                parameters["dropouts"], 
+                                parameters["activations"],
+                                parameters["optimizer_name"], 
+                                parameters["lr"], 
+                                parameters["nb_epochs"], 
+                                parameters["batch_size"],
+                                model_path,
+                                X_test_scaled,
+                                y_test,
+        )
+        best_mlp.load()
+        pipeline = Pipeline([
+            ('scaler', scaler),
+            ('mlp_classifier', best_mlp)
+        ])
         output_binary = pipeline.predict(X_test)
         print(confusion_matrix(y_test, output_binary))
         print(recall_score(y_test, output_binary))
