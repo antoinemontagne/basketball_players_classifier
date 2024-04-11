@@ -13,6 +13,7 @@ from classifiers.mlp_classifier import MLPClassifier_torch
 
 import optuna
 from optuna.trial import TrialState
+from optuna.samplers import TPESampler
 
 import torch
 import torch.nn as nn
@@ -146,7 +147,7 @@ if __name__ == "__main__":
     db_url = f'sqlite:///{db_file}'
 
     # Create the study
-    study = optuna.create_study(direction=opti_type, storage=db_url)
+    study = optuna.create_study(direction=opti_type, storage=db_url, sampler = TPESampler(seed=SEED))
     study.optimize(lambda trial: objective(trial, X_train, X_test, y_train, y_test, optimized_metric), n_trials=100, timeout=600)
 
     pruned_trials = study.get_trials(deepcopy=False, states=[TrialState.PRUNED])
