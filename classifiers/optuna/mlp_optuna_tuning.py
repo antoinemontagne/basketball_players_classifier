@@ -1,8 +1,10 @@
 import os, sys
 from pathlib import Path
+import argparse
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import f1_score, accuracy_score
 
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 sys.path.append(root_dir)
@@ -15,6 +17,31 @@ from optuna.trial import TrialState
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, RandomSampler, TensorDataset
+
+
+parser = argparse.ArgumentParser(
+    prog="MLP Classifier Optuna Tuning",
+)
+parser.add_argument(
+    "--optimized_metric",
+    type=str,
+    default="loss",
+    choices=["loss", "f1_score", "accuracy"],
+    help="Which metric to optimize",
+)
+parser.add_argument(
+    "--opti_type",
+    type=str,
+    default="minimize",
+    choices=["minimize", "maximize"],
+    help="Optimization type",
+)
+parser.add_argument(
+    "--study_name",
+    type=str,
+    default="default_study",
+    help="Name of the study db file",
+)
 
 
 def define_model(trial, input_dim):
@@ -37,27 +64,8 @@ def define_model(trial, input_dim):
     return model
 
 
-def objective(trial):
-    # Load, preprocess and split the dataset
-    datas_path = ".\\data\\nba_logreg.csv"
-    df_features, labels = extract_preprocessed_datas(datas_path, 'TARGET_5Yrs', ['Name'])
-
-    # Create the model path
-    current_path = Path.cwd()
-    model_path = current_path / "model"
-    if not model_path.exists():
-        model_path.mkdir(parents=True)
-
-    # Split the data
-    X_train, X_test, y_train, y_test = train_test_split(df_features.values, labels.values, test_size=0.33, random_state=SEED)
- 
-    # Scale the data
-    scaler = MinMaxScaler().fit(X_train)
-    X_train = scaler.transform(X_train)
-    X_test = scaler.transform(X_test)
-    
+def objective(trial, X_train, X_test, y_train, y_test, optimized_metric):
     # Generate the model
-    torch.manual_seed(SEED)
     model = define_model(trial, X_train.shape[1])
 
     # Define the optimzer, batch size and loss function
@@ -87,29 +95,59 @@ def objective(trial):
         model.eval()
         with torch.no_grad():
             output_test = model(torch.tensor(X_test, dtype=torch.float32))
-            loss_test = criterion(output_test, torch.tensor(y_test, dtype=torch.float32).reshape(-1, 1))
+            output_test_binary = (output_test >= 0.5).float()
 
-        trial.report(loss_test.item(), epoch)
+            if optimized_metric == "loss":
+                test_metric = criterion(output_test, torch.tensor(y_test, dtype=torch.float32).reshape(-1, 1))
+            elif optimized_metric == "accuracy":
+                test_metric = accuracy_score(y_test, output_test_binary)
+            elif optimized_metric == "f1_score":
+                test_metric = f1_score(y_test, output_test_binary)
+
+        trial.report(test_metric, epoch)
 
         # Handle pruning based on the intermediate value.
         if trial.should_prune():
             raise optuna.exceptions.TrialPruned()
         
-    return loss_test.item()
+    return test_metric
 
 
 if __name__ == "__main__":
+    # Parse the arguments
+    args = parser.parse_args()
+    optimized_metric = args.optimized_metric
+    opti_type = args.opti_type
+    study_name = args.study_name
+
+    # Load, preprocess and split the dataset
+    datas_path = ".\\data\\nba_logreg.csv"
+    df_features, labels = extract_preprocessed_datas(datas_path, 'TARGET_5Yrs', ['Name'])
+
+    # Split the data
+    X_train, X_test, y_train, y_test = train_test_split(df_features.values, labels.values, test_size=0.33, random_state=SEED)
+ 
+    # Scale the data
+    scaler = MinMaxScaler().fit(X_train)
+    X_train = scaler.transform(X_train)
+    X_test = scaler.transform(X_test)
+    
+    # Generate the model
+    torch.manual_seed(SEED)
+
+    # Define where the study will be stored as a sqlite file
     current_path = Path.cwd()
     db_path = current_path / "classifiers" / "optuna" / "study"
     if not db_path.exists():
         db_path.mkdir(parents=True)
-    db_file = db_path / 'mlp_optu_100_tpe_500_loss.db'
+    db_file = db_path / study_name  # Set the study name here
     if not os.path.exists(db_file):
         open(db_file, 'a').close() 
     db_url = f'sqlite:///{db_file}'
 
-    study = optuna.create_study(direction="minimize", storage=db_url)
-    study.optimize(objective, n_trials=100, timeout=600)
+    # Create the study
+    study = optuna.create_study(direction=opti_type, storage=db_url)
+    study.optimize(lambda trial: objective(trial, X_train, X_test, y_train, y_test, optimized_metric), n_trials=100, timeout=600)
 
     pruned_trials = study.get_trials(deepcopy=False, states=[TrialState.PRUNED])
     complete_trials = study.get_trials(deepcopy=False, states=[TrialState.COMPLETE])

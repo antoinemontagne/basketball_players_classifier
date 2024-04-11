@@ -1,7 +1,8 @@
-lr: 0.006844259372316053
-nb_epochs: 100
+lr: 0.008797557703488088
+nb_epochs: 200
 optimizer_name: Adam
-batch_size: 32
-n_neurons: 104, 50
-dropouts: 0.30786161527864464, 0.31744412600341065
-activations: ReLU, ReLU
+batch_size: 47
+n_neurons: 23
+dropouts: 0.3535981593563302
+activations: ELU
+weight_decay: 0.00035415878330049633

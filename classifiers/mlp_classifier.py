@@ -68,7 +68,21 @@ class MLPClassifier_torch(nn.Module):
 
 class MLPClassifier():
     '''Training and evaluation for MLP classifier'''
-    def __init__(self, in_features, nb_hidden_layers, hidden_layer_sizes, hidden_dropout_probas, hidden_activations, optimizer_name, lr, nb_epochs, batch_size, path, X_test, y_test):
+    def __init__(self, 
+                 in_features, 
+                 nb_hidden_layers, 
+                 hidden_layer_sizes, 
+                 hidden_dropout_probas, 
+                 hidden_activations, 
+                 optimizer_name, 
+                 lr, 
+                 weight_decay, 
+                 nb_epochs, 
+                 batch_size, 
+                 path, 
+                 X_test, 
+                 y_test,
+    ):
         '''Initialize the model
         Args:
             in_features (int): number of input features
@@ -84,7 +98,7 @@ class MLPClassifier():
         self.mlp = MLPClassifier_torch(in_features, nb_hidden_layers, hidden_layer_sizes, hidden_dropout_probas, hidden_activations)
         self.optimizer_name = optimizer_name
         self.lr = lr
-        self.optimizer = getattr(optim, self.optimizer_name)(self.mlp.parameters(), lr=lr)
+        self.optimizer = getattr(optim, self.optimizer_name)(self.mlp.parameters(), lr=lr, weight_decay=weight_decay)
         self.criterion = nn.BCELoss()
         self.nb_epochs = nb_epochs
         self.batch_size = batch_size
@@ -98,6 +112,13 @@ class MLPClassifier():
             for module in modules:
                 module.reset_parameters()
         self.optimizer = getattr(optim, self.optimizer_name)(self.mlp.parameters(), lr=self.lr)
+
+    def set_nb_epochs(self, nb_epochs):
+        '''Set the number of epochs
+        Args:
+            nb_epochs (int): number of epochs
+        '''
+        self.nb_epochs = nb_epochs
 
     def fit(self, X_train, y_train):
         '''Train the model
@@ -139,6 +160,7 @@ class MLPClassifier():
             if epoch % (self.nb_epochs // 10) == 0:
                 print(f"Epoch {epoch} - Train loss: {losses[0][-1]} - Test loss: {losses[1][-1]}")
 
+        plt.clf()
         plt.plot(losses[0], label='Train loss')
         plt.plot(losses[1], label='Test loss')
         plt.axvline(best_epoch, color='r', linestyle='--', label=f'Best epoch {best_epoch}')
@@ -194,7 +216,7 @@ def read_parameters(parameters_path):
             key, value = line.split(":")
             if key == "optimizer_name":
                 parameters[key] = value.strip()
-            elif key == "lr":
+            elif key in ["lr", "weight_decay"]:
                 parameters[key] = float(value)
             elif key in ["nb_epochs", "batch_size"]:
                 parameters[key] = int(value)
@@ -208,6 +230,7 @@ def read_parameters(parameters_path):
     
 
 def main():
+    # Parse the arguments
     args = parser.parse_args()
     cross_validation = args.cross_validation
 
@@ -217,7 +240,7 @@ def main():
 
     # Create the model path
     current_path = Path.cwd()
-    model_path = current_path / "model"
+    model_path = current_path / "classifiers" / "model_weights"
     if not model_path.exists():
         model_path.mkdir(parents=True)
 
@@ -238,6 +261,7 @@ def main():
                             parameters["activations"],
                             parameters["optimizer_name"], 
                             parameters["lr"], 
+                            parameters["weight_decay"],
                             parameters["nb_epochs"], 
                             parameters["batch_size"],
                             model_path,
@@ -257,35 +281,30 @@ def main():
         pipeline.fit(X_train, y_train)
 
         # Test the best model
-        # Create the model
-        scaler = MinMaxScaler().fit(X_train)
-        X_test_scaled = scaler.transform(X_test)
-        torch.manual_seed(SEED)
-        best_mlp = MLPClassifier(X_train.shape[1], 
-                                len(parameters["n_neurons"]), 
-                                parameters["n_neurons"], 
-                                parameters["dropouts"], 
-                                parameters["activations"],
-                                parameters["optimizer_name"], 
-                                parameters["lr"], 
-                                parameters["nb_epochs"], 
-                                parameters["batch_size"],
-                                model_path,
-                                X_test_scaled,
-                                y_test,
-        )
-        best_mlp.load()
-        pipeline = Pipeline([
-            ('scaler', scaler),
-            ('mlp_classifier', best_mlp)
-        ])
+        # Load the best model via early-stopping
+        pipeline[1].load()
         output_binary = pipeline.predict(X_test)
         print(confusion_matrix(y_test, output_binary))
         print(recall_score(y_test, output_binary))
     
     else:
         print("Cross-validation")
-        _, _ = score_classifier(df_features.values, pipeline, labels, 3, True, True)
+        print("Testing for several epochs")
+        epochs = [(i+1)*50 for i in range(8, 15)]
+        all_recalls_epochs = []
+        for epoch in epochs:
+            print(f"Testing for {epoch} epochs")
+            pipeline[1].set_nb_epochs(epoch)  # Set the new epoch number before the next CV
+            _, recalls = score_classifier(df_features.values, pipeline, labels, 3, False, True, False)
+            all_recalls_epochs.append(sum(recalls) / len(recalls))
+            print(f"Mean recall score: {all_recalls_epochs[-1]}\n")
+        plt.clf()
+        plt.plot(epochs, all_recalls_epochs)
+        plt.xlabel("Number of epochs")
+        plt.ylabel("Mean recall score")
+        plt.show()
+        # pipeline[1].set_nb_epochs(550)  # Set the new epoch number before the next CV
+        # _, _ = score_classifier(df_features.values, pipeline, labels, 3, True, True, True)
 
 
 if __name__ == '__main__':
