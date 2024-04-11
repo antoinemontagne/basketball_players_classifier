@@ -44,7 +44,10 @@ class MLPClassifier_torch(nn.Module):
         self.hidden_activations = hidden_activations
         self.hidden_dropout_probas = hidden_dropout_probas
         for i in range(nb_hidden_layers):
-            self.layers.append(nn.Linear(in_features, hidden_layer_sizes[i]))
+            new_linear_layer = nn.Linear(in_features, hidden_layer_sizes[i])
+            nn.init.xavier_uniform_(new_linear_layer.weight)
+            nn.init.zeros_(new_linear_layer.bias)
+            self.layers.append(new_linear_layer)
             in_features = hidden_layer_sizes[i]
         
         self.layers.append(nn.Linear(in_features, 1))
@@ -135,6 +138,7 @@ class MLPClassifier():
         for epoch in range(self.nb_epochs):
             self.mlp.train()
             batch_losses = []
+            torch.manual_seed(SEED + epoch)
             for X_batch, y_batch in train_loader:
                 self.optimizer.zero_grad()
                 output = self.mlp(X_batch)
@@ -250,7 +254,7 @@ def main():
     # Get the parameters from the parameters file
     parameters = read_parameters(current_path / "classifiers" / "parameters.txt")
 
-    # Create the model
+    # Create the first model
     scaler = MinMaxScaler().fit(X_train)
     X_test_scaled = scaler.transform(X_test)
     torch.manual_seed(SEED)
@@ -274,10 +278,32 @@ def main():
         ('mlp_classifier', mlp)
     ])
 
+    # Create the second model
+    torch.manual_seed(SEED)
+    mlp2 = MLPClassifier(X_train.shape[1], 
+                            len(parameters["n_neurons"]), 
+                            parameters["n_neurons"], 
+                            parameters["dropouts"], 
+                            parameters["activations"],
+                            parameters["optimizer_name"], 
+                            parameters["lr"], 
+                            parameters["weight_decay"],
+                            parameters["nb_epochs"], 
+                            parameters["batch_size"],
+                            model_path,
+                            X_test_scaled,
+                            y_test,
+    )
+
+    pipeline2 = Pipeline([
+        ('scaler', scaler),
+        ('mlp_classifier', mlp2)
+    ])
+
     # Train & Evaluate the model
     if not cross_validation:
         # Train the pipeline
-        print("Training the model")
+        print("Training the first model")
         pipeline.fit(X_train, y_train)
 
         # Test the best model
@@ -286,6 +312,16 @@ def main():
         output_binary = pipeline.predict(X_test)
         print(confusion_matrix(y_test, output_binary))
         print(recall_score(y_test, output_binary))
+
+        print("Training the second model")
+        pipeline2.fit(X_train, y_train)
+
+        # Test the best model
+        # Load the best model via early-stopping
+        pipeline2[1].load()
+        output_binary2 = pipeline2.predict(X_test)
+        print(confusion_matrix(y_test, output_binary2))
+        print(recall_score(y_test, output_binary2))
     
     else:
         print("Cross-validation")
@@ -302,7 +338,7 @@ def main():
         plt.plot(epochs, all_recalls_epochs)
         plt.xlabel("Number of epochs")
         plt.ylabel("Mean recall score")
-        plt.show()
+        plt.savefig(model_path / 'epochs.png')
         # pipeline[1].set_nb_epochs(550)  # Set the new epoch number before the next CV
         # _, _ = score_classifier(df_features.values, pipeline, labels, 3, True, True, True)
 
