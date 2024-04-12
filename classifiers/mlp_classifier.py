@@ -43,6 +43,7 @@ class MLPClassifier_torch(nn.Module):
         self.nb_hidden_layers = nb_hidden_layers
         self.hidden_activations = hidden_activations
         self.hidden_dropout_probas = hidden_dropout_probas
+        torch.manual_seed(SEED)
         for i in range(nb_hidden_layers):
             new_linear_layer = nn.Linear(in_features, hidden_layer_sizes[i])
             nn.init.xavier_uniform_(new_linear_layer.weight)
@@ -50,7 +51,10 @@ class MLPClassifier_torch(nn.Module):
             self.layers.append(new_linear_layer)
             in_features = hidden_layer_sizes[i]
         
-        self.layers.append(nn.Linear(in_features, 1))
+        last_layer = nn.Linear(in_features, 1)
+        nn.init.xavier_uniform_(last_layer.weight)
+        nn.init.zeros_(last_layer.bias)
+        self.layers.append(last_layer)
         self.layers = nn.ParameterList(self.layers)  # To grant the optimizer access to the model's layers.
 
     def forward(self, x):
@@ -99,6 +103,7 @@ class MLPClassifier():
             path (Path): path to save the model
         '''
         self.mlp = MLPClassifier_torch(in_features, nb_hidden_layers, hidden_layer_sizes, hidden_dropout_probas, hidden_activations)
+        torch.save(self.mlp.state_dict(), path / "init_mlp_model.pth")
         self.optimizer_name = optimizer_name
         self.lr = lr
         self.optimizer = getattr(optim, self.optimizer_name)(self.mlp.parameters(), lr=lr, weight_decay=weight_decay)
@@ -111,9 +116,8 @@ class MLPClassifier():
 
     def reset_model(self):
         '''Resetting the model weights and the state of the optimizer'''
-        for _, modules in self.mlp.named_children():
-            for module in modules:
-                module.reset_parameters()
+        init_weights = torch.load(self.path / "init_mlp_model.pth")
+        self.mlp.load_state_dict(init_weights)
         self.optimizer = getattr(optim, self.optimizer_name)(self.mlp.parameters(), lr=self.lr)
 
     def set_nb_epochs(self, nb_epochs):
@@ -254,10 +258,9 @@ def main():
     # Get the parameters from the parameters file
     parameters = read_parameters(current_path / "classifiers" / "parameters.txt")
 
-    # Create the first model
+    # Create the model
     scaler = MinMaxScaler().fit(X_train)
     X_test_scaled = scaler.transform(X_test)
-    torch.manual_seed(SEED)
     mlp = MLPClassifier(X_train.shape[1], 
                             len(parameters["n_neurons"]), 
                             parameters["n_neurons"], 
@@ -278,32 +281,10 @@ def main():
         ('mlp_classifier', mlp)
     ])
 
-    # Create the second model
-    torch.manual_seed(SEED)
-    mlp2 = MLPClassifier(X_train.shape[1], 
-                            len(parameters["n_neurons"]), 
-                            parameters["n_neurons"], 
-                            parameters["dropouts"], 
-                            parameters["activations"],
-                            parameters["optimizer_name"], 
-                            parameters["lr"], 
-                            parameters["weight_decay"],
-                            parameters["nb_epochs"], 
-                            parameters["batch_size"],
-                            model_path,
-                            X_test_scaled,
-                            y_test,
-    )
-
-    pipeline2 = Pipeline([
-        ('scaler', scaler),
-        ('mlp_classifier', mlp2)
-    ])
-
     # Train & Evaluate the model
     if not cross_validation:
         # Train the pipeline
-        print("Training the first model")
+        print("Training the model")
         pipeline.fit(X_train, y_train)
 
         # Test the best model
@@ -313,15 +294,18 @@ def main():
         print(confusion_matrix(y_test, output_binary))
         print(recall_score(y_test, output_binary))
 
-        print("Training the second model")
-        pipeline2.fit(X_train, y_train)
-
+        # Train with reset model
+        print("Training the model with reset model")
+        pipeline[1].reset_model()
+        pipeline.fit(X_train, y_train)
+        
         # Test the best model
         # Load the best model via early-stopping
-        pipeline2[1].load()
-        output_binary2 = pipeline2.predict(X_test)
-        print(confusion_matrix(y_test, output_binary2))
-        print(recall_score(y_test, output_binary2))
+        pipeline[1].load()
+        output_binary = pipeline.predict(X_test)
+        print(confusion_matrix(y_test, output_binary))
+        print(recall_score(y_test, output_binary))
+
     
     else:
         print("Cross-validation")
