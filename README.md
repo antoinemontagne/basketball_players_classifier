@@ -24,7 +24,7 @@ Ce MLP est implémenté en PyTorch et évalué de deux manières : classiquement
 
 Pour lancer l'API Flask, exécutez la commande :
 ```bash
-python classifiers/flask_api.py
+python flask_api/flask_inference.py
 ```
 
 Ensuite, ouvrez une nouvelle fenêtre de terminal et exécutez :
